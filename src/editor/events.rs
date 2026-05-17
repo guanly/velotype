@@ -773,7 +773,7 @@ impl Editor {
                     BlockRecord::new(current_kind.newline_sibling_kind(), trailing.clone()),
                 );
                 if self.view_mode == super::ViewMode::Source {
-                    new_block.update(cx, |block, _cx| block.set_source_raw_mode());
+                    new_block.update(cx, |block, _cx| block.set_source_document_mode());
                 }
                 self.document.insert_blocks_at(
                     location.parent,

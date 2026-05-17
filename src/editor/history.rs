@@ -280,7 +280,7 @@ impl Editor {
             }
             ViewMode::Source => {
                 let block = Self::new_block(cx, BlockRecord::paragraph(entry.source_text.clone()));
-                block.update(cx, |block, _cx| block.set_source_raw_mode());
+                block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.table_cells.clear();
             }

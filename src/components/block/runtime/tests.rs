@@ -1233,6 +1233,40 @@ async fn ime_replace_text_replaces_right_to_left_selection_in_source_raw_mode(
 }
 
 #[gpui::test]
+async fn source_document_mode_enables_line_numbers(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("a\nb")),
+        );
+        block.set_source_document_mode();
+        block
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert!(block.is_source_raw_mode());
+        assert!(block.show_source_line_numbers());
+    });
+}
+
+#[gpui::test]
+async fn source_raw_mode_does_not_enable_line_numbers(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| {
+        let mut block = Block::with_record(
+            cx,
+            BlockRecord::new(BlockKind::Paragraph, InlineTextTree::plain("raw")),
+        );
+        block.set_source_raw_mode();
+        block
+    });
+
+    block.read_with(cx, |block, _cx| {
+        assert!(block.is_source_raw_mode());
+        assert!(!block.show_source_line_numbers());
+    });
+}
+
+#[gpui::test]
 async fn ime_replace_and_mark_text_replaces_right_to_left_selection_in_table_cell(
     cx: &mut TestAppContext,
 ) {

@@ -141,6 +141,7 @@ pub struct Block {
     /// When true, block-level shortcuts and inline formatting are
     /// suppressed; the block stores raw text for source-mode editing.
     pub(crate) edit_mode: EditMode,
+    show_source_line_numbers: bool,
     pub(crate) table_runtime: Option<TableRuntime>,
     pub(crate) table_cell_position: Option<TableCellPosition>,
     pub(crate) table_cell_alignment: Option<TableColumnAlignment>,
@@ -234,6 +235,7 @@ impl Block {
             inline_math_source_edit_original: None,
             collapsed_caret_affinity: CollapsedCaretAffinity::Default,
             edit_mode,
+            show_source_line_numbers: false,
             table_runtime: None,
             table_cell_position: None,
             table_cell_alignment: None,
@@ -274,6 +276,10 @@ impl Block {
         self.edit_mode == EditMode::SourceRaw
     }
 
+    pub(crate) fn show_source_line_numbers(&self) -> bool {
+        self.show_source_line_numbers
+    }
+
     pub(crate) fn take_quote_reparse_requested(&mut self) -> bool {
         let requested = self.quote_reparse_requested;
         self.quote_reparse_requested = false;
@@ -311,11 +317,18 @@ impl Block {
     pub(crate) fn set_source_raw_mode(&mut self) {
         self.clear_inline_projection();
         self.edit_mode = EditMode::SourceRaw;
+        self.show_source_line_numbers = false;
+    }
+
+    pub(crate) fn set_source_document_mode(&mut self) {
+        self.set_source_raw_mode();
+        self.show_source_line_numbers = true;
     }
 
     pub(crate) fn sync_edit_mode_from_kind(&mut self) {
         if self.table_cell_position.is_some() {
             self.edit_mode = EditMode::RenderedRich;
+            self.show_source_line_numbers = false;
             return;
         }
         if self.edit_mode != EditMode::SourceRaw {
@@ -323,6 +336,7 @@ impl Block {
                 self.clear_inline_projection();
             }
             self.edit_mode = EditMode::for_kind(&self.record.kind);
+            self.show_source_line_numbers = false;
         }
     }
 

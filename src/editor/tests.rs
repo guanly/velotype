@@ -2037,11 +2037,17 @@ async fn toggle_view_mode_preserves_paragraph_caret_position(cx: &mut TestAppCon
         assert!(matches!(editor.view_mode, ViewMode::Source));
         let source = editor.document.first_root().expect("source root").clone();
         assert_eq!(source.read(cx).selected_range, 9..9);
+        assert!(source.read(cx).show_source_line_numbers());
 
         editor.toggle_view_mode(cx);
         assert!(matches!(editor.view_mode, ViewMode::Rendered));
         let visible = editor.document.visible_blocks();
         assert_eq!(visible.len(), 2);
+        assert!(
+            visible
+                .iter()
+                .all(|visible| !visible.entity.read(cx).show_source_line_numbers())
+        );
         assert_eq!(visible[1].entity.read(cx).display_text(), "beta");
         assert_eq!(visible[1].entity.read(cx).selected_range, 2..2);
         assert_eq!(editor.pending_focus, Some(visible[1].entity.entity_id()));

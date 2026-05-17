@@ -175,7 +175,7 @@ impl Editor {
             ViewMode::Rendered => {
                 let markdown = self.document.markdown_text(cx);
                 let block = Self::new_block(cx, BlockRecord::paragraph(markdown));
-                block.update(cx, |block, _cx| block.set_source_raw_mode());
+                block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.view_mode = ViewMode::Source;
                 self.table_cells.clear();

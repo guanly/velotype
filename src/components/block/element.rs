@@ -8,6 +8,50 @@ use super::{Block, InlineFootnoteHit, InlineLinkHit, code_highlight_color};
 use crate::components::HtmlCssColor;
 use crate::theme::{ThemeColors, ThemeManager};
 
+const SOURCE_LINE_NUMBER_MIN_DIGITS: usize = 2;
+const SOURCE_LINE_NUMBER_GAP: f32 = 12.0;
+const SOURCE_LINE_NUMBER_DIGIT_WIDTH_RATIO: f32 = 0.62;
+
+fn source_line_count(text: &str) -> usize {
+    text.split('\n').count().max(1)
+}
+
+fn source_line_number_gutter_width(line_count: usize, font_size: Pixels) -> Pixels {
+    let digits = line_count
+        .max(1)
+        .to_string()
+        .len()
+        .max(SOURCE_LINE_NUMBER_MIN_DIGITS);
+    px(digits as f32 * f32::from(font_size) * SOURCE_LINE_NUMBER_DIGIT_WIDTH_RATIO)
+        + px(SOURCE_LINE_NUMBER_GAP)
+}
+
+fn source_text_bounds(bounds: Bounds<Pixels>, gutter_width: Pixels) -> Bounds<Pixels> {
+    if gutter_width <= px(0.0) {
+        return bounds;
+    }
+
+    let max_gutter = (f32::from(bounds.size.width) - 1.0).max(0.0);
+    let gutter_width = px(f32::from(gutter_width).min(max_gutter));
+    Bounds::new(
+        point(bounds.origin.x + gutter_width, bounds.origin.y),
+        size(
+            (bounds.size.width - gutter_width).max(px(1.0)),
+            bounds.size.height,
+        ),
+    )
+}
+
+fn source_line_number_tops(lines: &[WrappedLine], line_height: Pixels) -> Vec<Pixels> {
+    let mut tops = Vec::with_capacity(lines.len());
+    let mut y = Pixels::default();
+    for line in lines {
+        tops.push(y);
+        y += wrapped_line_height(line, line_height);
+    }
+    tops
+}
+
 fn build_text_runs(
     input: &Block,
     display_text: &SharedString,
@@ -785,6 +829,8 @@ impl BlockTextElement {
 /// Prepared text layout and paint geometry for one `BlockTextElement` frame.
 pub struct PrepaintState {
     lines: Vec<WrappedLine>,
+    source_line_numbers: Vec<ShapedLine>,
+    source_line_number_gutter_width: Pixels,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
     code_backgrounds: Vec<PaintQuad>,
@@ -824,6 +870,8 @@ impl Element for BlockTextElement {
         let content = input.display_text().to_string();
         let is_placeholder = self.is_placeholder;
         let show_inline_code_backgrounds = !input.is_source_raw_mode();
+        let show_source_line_numbers = input.show_source_line_numbers();
+        let source_line_count = source_line_count(&content);
         let style = window.text_style();
 
         let (display_text, text_color): (SharedString, Hsla) = if is_placeholder {
@@ -873,6 +921,9 @@ impl Element for BlockTextElement {
 
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
+        let source_line_number_gutter_width = show_source_line_numbers
+            .then(|| source_line_number_gutter_width(source_line_count, font_size))
+            .unwrap_or(px(0.0));
 
         let shared_lines = Rc::new(RefCell::new(None));
         let shared_lines_clone = shared_lines.clone();
@@ -890,12 +941,14 @@ impl Element for BlockTextElement {
                     AvailableSpace::MinContent => Some(px(1.0)),
                     AvailableSpace::MaxContent => Some(window.viewport_size().width.max(px(1.0))),
                 });
+                let text_wrap_width =
+                    wrap_width.map(|width| (width - source_line_number_gutter_width).max(px(1.0)));
 
                 match window.text_system().shape_text(
                     display_text.clone(),
                     font_size,
                     &runs,
-                    wrap_width,
+                    text_wrap_width,
                     None,
                 ) {
                     Ok(lines) => {
@@ -905,6 +958,7 @@ impl Element for BlockTextElement {
                             total_size.height += ls.height;
                             total_size.width = total_size.width.max(ls.width);
                         }
+                        total_size.width += source_line_number_gutter_width;
                         *shared_lines_clone.borrow_mut() = Some(lines.into_vec());
                         total_size
                     }
@@ -939,9 +993,39 @@ impl Element for BlockTextElement {
         let line_height = window.line_height();
         let focused = input.focus_handle.is_focused(window);
         let show_inline_code_backgrounds = !input.is_source_raw_mode();
+        let show_source_line_numbers = input.show_source_line_numbers();
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
 
         let lines = request_layout.borrow_mut().take().unwrap_or_default();
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        let source_line_number_gutter_width = show_source_line_numbers
+            .then(|| source_line_number_gutter_width(lines.len().max(1), font_size))
+            .unwrap_or(px(0.0));
+        let text_bounds = source_text_bounds(bounds, source_line_number_gutter_width);
+        let source_line_numbers = if show_source_line_numbers {
+            let run_color = theme.colors.text_placeholder;
+            (1..=lines.len().max(1))
+                .map(|line_number| {
+                    let label = line_number.to_string();
+                    window.text_system().shape_line(
+                        SharedString::from(label.clone()),
+                        font_size,
+                        &[TextRun {
+                            len: label.len(),
+                            font: style.font(),
+                            color: run_color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        }],
+                        None,
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         let cursor_opacity = input.cursor_opacity();
         let cursor_color = {
@@ -958,7 +1042,7 @@ impl Element for BlockTextElement {
                 if self.is_placeholder {
                     // Placeholder: cursor after the placeholder text
                     let layout = &lines[0];
-                    let origin_x = aligned_line_left(layout, bounds, text_align);
+                    let origin_x = aligned_line_left(layout, text_bounds, text_align);
                     let cursor_pos = layout
                         .position_for_index(0, line_height)
                         .unwrap_or_default();
@@ -966,7 +1050,7 @@ impl Element for BlockTextElement {
                         vec![],
                         Some(fill(
                             Bounds::new(
-                                point(origin_x + cursor_pos.x, bounds.top() + cursor_pos.y),
+                                point(origin_x + cursor_pos.x, text_bounds.top() + cursor_pos.y),
                                 size(px(cursor_width), line_height),
                             ),
                             cursor_color,
@@ -979,7 +1063,7 @@ impl Element for BlockTextElement {
                         vec![],
                         cursor_bounds_for_offset(
                             &lines,
-                            bounds,
+                            text_bounds,
                             line_height,
                             text,
                             cursor,
@@ -992,7 +1076,7 @@ impl Element for BlockTextElement {
                     let text = input.display_text();
                     let quads = range_segment_bounds(
                         &lines,
-                        bounds,
+                        text_bounds,
                         line_height,
                         text,
                         selected_range,
@@ -1021,7 +1105,7 @@ impl Element for BlockTextElement {
                 }
                 for segment in range_segment_bounds(
                     &lines,
-                    bounds,
+                    text_bounds,
                     line_height,
                     text,
                     span.range.clone(),
@@ -1042,6 +1126,8 @@ impl Element for BlockTextElement {
 
         PrepaintState {
             lines,
+            source_line_numbers,
+            source_line_number_gutter_width,
             cursor: cursor_quad,
             selection: selection_quads,
             code_backgrounds: code_quads,
@@ -1062,13 +1148,14 @@ impl Element for BlockTextElement {
     ) {
         let (focus_handle, hovered_link) = {
             let input = self.input.read(cx);
+            let text_bounds = source_text_bounds(bounds, prepaint.source_line_number_gutter_width);
             let hovered_link = !self.is_placeholder
                 && !input.is_source_raw_mode()
                 && prepaint.hitbox.is_hovered(window)
                 && link_at_position(
                     &input,
                     &prepaint.lines,
-                    bounds,
+                    text_bounds,
                     prepaint.line_height,
                     window.mouse_position(),
                 )
@@ -1081,9 +1168,10 @@ impl Element for BlockTextElement {
         }
 
         if focus_handle.is_focused(window) {
+            let text_bounds = source_text_bounds(bounds, prepaint.source_line_number_gutter_width);
             window.handle_input(
                 &focus_handle,
-                ElementInputHandler::new(bounds, self.input.clone()),
+                ElementInputHandler::new(text_bounds, self.input.clone()),
                 cx,
             );
         }
@@ -1100,11 +1188,30 @@ impl Element for BlockTextElement {
         let line_height = prepaint.line_height;
         let lines = std::mem::take(&mut prepaint.lines);
         let text_align = self.input.read(cx).text_align();
+        let text_bounds = source_text_bounds(bounds, prepaint.source_line_number_gutter_width);
+        let line_number_tops = source_line_number_tops(&lines, line_height);
+        let line_number_gap = px(SOURCE_LINE_NUMBER_GAP);
+        let line_numbers = std::mem::take(&mut prepaint.source_line_numbers);
+        for (line_number, y_offset) in line_numbers.iter().zip(line_number_tops.iter()) {
+            let line_number_width = line_number.x_for_index(line_number.len());
+            line_number
+                .paint(
+                    point(
+                        text_bounds.left() - line_number_gap - line_number_width,
+                        bounds.origin.y + *y_offset,
+                    ),
+                    line_height,
+                    window,
+                    cx,
+                )
+                .ok();
+        }
+
         let mut y_offset = Pixels::default();
         for line in &lines {
-            let origin_x = aligned_line_left(line, bounds, text_align);
+            let origin_x = aligned_line_left(line, text_bounds, text_align);
             line.paint(
-                point(origin_x, bounds.origin.y + y_offset),
+                point(origin_x, text_bounds.origin.y + y_offset),
                 line_height,
                 TextAlign::Left,
                 None,
@@ -1123,7 +1230,7 @@ impl Element for BlockTextElement {
 
         self.input.update(cx, |input, _cx| {
             input.last_layout = Some(lines);
-            input.last_bounds = Some(bounds);
+            input.last_bounds = Some(text_bounds);
             input.last_line_height = line_height;
         });
     }
@@ -1131,7 +1238,10 @@ impl Element for BlockTextElement {
 
 #[cfg(test)]
 mod tests {
-    use super::link_at_position;
+    use super::{
+        link_at_position, source_line_number_gutter_width, source_line_number_tops,
+        source_text_bounds, wrapped_line_height,
+    };
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, TableCellPosition};
     use gpui::{
         AppContext, Bounds, Hsla, SharedString, TestAppContext, TextAlign, TextRun,
@@ -1163,6 +1273,45 @@ mod tests {
                 .expect("text should shape")
                 .into_vec()
         })
+    }
+
+    #[test]
+    fn source_line_number_gutter_grows_with_digit_count() {
+        let one_digit = source_line_number_gutter_width(9, px(16.0));
+        let two_digits = source_line_number_gutter_width(10, px(16.0));
+        let three_digits = source_line_number_gutter_width(100, px(16.0));
+
+        assert_eq!(one_digit, two_digits);
+        assert!(three_digits > two_digits);
+    }
+
+    #[test]
+    fn source_text_bounds_are_offset_by_gutter_width() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(300.0), px(120.0)));
+        let text_bounds = source_text_bounds(bounds, px(48.0));
+
+        assert_eq!(text_bounds.left(), px(58.0));
+        assert_eq!(text_bounds.top(), px(20.0));
+        assert_eq!(text_bounds.size.width, px(252.0));
+        assert_eq!(text_bounds.size.height, px(120.0));
+    }
+
+    #[gpui::test]
+    async fn source_line_number_tops_follow_soft_wrapped_hard_lines(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let lines = shaped_lines(
+            "this line should wrap before the next hard line\nsecond",
+            px(92.0),
+            cx,
+        );
+        assert!(
+            !lines[0].wrap_boundaries().is_empty(),
+            "first hard line should soft-wrap"
+        );
+
+        let tops = source_line_number_tops(&lines, px(20.0));
+        assert_eq!(tops[0], px(0.0));
+        assert_eq!(tops[1], wrapped_line_height(&lines[0], px(20.0)));
     }
 
     #[gpui::test]

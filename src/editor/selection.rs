@@ -449,7 +449,7 @@ impl Editor {
                     cx,
                     crate::components::BlockRecord::paragraph(source.clone()),
                 );
-                block.update(cx, |block, _cx| block.set_source_raw_mode());
+                block.update(cx, |block, _cx| block.set_source_document_mode());
                 self.document.replace_roots(vec![block], cx);
                 self.table_cells.clear();
             }
